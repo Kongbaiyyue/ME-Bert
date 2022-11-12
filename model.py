@@ -3,6 +3,7 @@ import math
 import torch
 import torch.nn as nn
 
+device = torch.device("cpu")
 
 def gelu(x):
     return 0.5 * x * (1.0 + torch.erf(x / torch.sqrt(torch.tensor(2.))))
@@ -19,11 +20,11 @@ class MultiHeadAttention(nn.Module):
 
         self.depth = d_model // self.num_heads
 
-        self.wq = nn.Linear(d_model, d_model, device='cuda')
-        self.wk = nn.Linear(d_model, d_model, device='cuda')
-        self.wv = nn.Linear(d_model, d_model, device='cuda')
+        self.wq = nn.Linear(d_model, d_model, device=device)
+        self.wk = nn.Linear(d_model, d_model, device=device)
+        self.wv = nn.Linear(d_model, d_model, device=device)
 
-        self.dense = nn.Linear(d_model, d_model, device='cuda')
+        self.dense = nn.Linear(d_model, d_model, device=device)
 
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
@@ -31,7 +32,7 @@ class MultiHeadAttention(nn.Module):
         if self.max_relative_positions > 0:
             vocab_size = self.max_relative_positions * 2 + 1
             self.relative_positions_embeddings = nn.Embedding(
-                vocab_size, self.depth, device='cuda')
+                vocab_size, self.depth, device=device)
 
     # def split_heads(self, x, batch_size):
     #     """Split the last dimension into (num_heads, depth).
@@ -150,9 +151,9 @@ class PositionwiseFeedForward(nn.Module):
 
     def __init__(self, d_model, d_ff, dropout=0.1):
         super(PositionwiseFeedForward, self).__init__()
-        self.w_1 = nn.Linear(d_model, d_ff, device='cuda')
-        self.w_2 = nn.Linear(d_ff, d_model, device='cuda')
-        self.layer_norm = nn.LayerNorm(d_model, eps=1e-6, device='cuda')
+        self.w_1 = nn.Linear(d_model, d_ff, device=device)
+        self.w_2 = nn.Linear(d_ff, d_model, device=device)
+        self.layer_norm = nn.LayerNorm(d_model, eps=1e-6, device=device)
         self.dropout_1 = nn.Dropout(dropout)
         self.relu = nn.ReLU()
         self.dropout_2 = nn.Dropout(dropout)
@@ -179,8 +180,8 @@ class EncoderLayer(nn.Module):
         self.mha = MultiHeadAttention(d_model, num_heads, dropout)
         self.ffn = PositionwiseFeedForward(d_model, dff)
 
-        self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6, device='cuda')
-        self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6, device='cuda')
+        self.layernorm1 = nn.LayerNorm(d_model, eps=1e-6, device=device)
+        self.layernorm2 = nn.LayerNorm(d_model, eps=1e-6, device=device)
 
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
@@ -206,7 +207,7 @@ class Encoder(nn.Module):
         self.d_model = d_model
         self.num_layers = num_layers
 
-        self.embedding = nn.Embedding(input_vocab_size, d_model, device='cuda')
+        self.embedding = nn.Embedding(input_vocab_size, d_model, device=device)
         # self.pos_encoding = positional_encoding(maximum_position_encoding,
         #                                         self.d_model)
 
@@ -239,13 +240,14 @@ class BertModel(nn.Module):
                                dropout=dropout_rate)
         self.fc1 = nn.Linear(d_model, d_model)
         self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
-        # self.fc2 = nn.Linear(d_model, vocab_size)
+        self.fc2 = nn.Linear(d_model, vocab_size)
 
     def forward(self, x, adjoin_matrix, mask, training=False):
         x = self.encoder(x, training=training, mask=mask, adjoin_matrix=adjoin_matrix)
         x = self.fc1(x)
         x = self.layer_norm(x)
         # x = self.fc2(x)
+        # y = torch.nonzero(pred_positions)
         return x
 
 
@@ -256,10 +258,11 @@ class MaskLM(nn.Module):
         self.max_length = max_length
         self.num_inputs = num_inputs
 
-        self.mlp = nn.Sequential(nn.Linear(num_inputs, num_hiddens, device='cuda'),
-                                 nn.ReLU(),
-                                 nn.LayerNorm(num_hiddens, device='cuda'),
-                                 nn.Linear(num_hiddens, vocab_size, device='cuda'))
+        # self.mlp = nn.Sequential(nn.Linear(num_inputs, num_hiddens, device=device),
+        #                          nn.ReLU(),
+        #                          nn.LayerNorm(num_hiddens, device=device),
+        #                          nn.Linear(num_hiddens, vocab_size, device=device))
+        self.mlp = nn.Linear(num_inputs, vocab_size, device=device)
 
     def forward(self, X, pred_positions):
         # num_pred_positions = pred_positions.shape[1]
@@ -271,10 +274,15 @@ class MaskLM(nn.Module):
         # batch_idx = torch.repeat_interleave(batch_idx, num_pred_positions)
         # masked_X = X[batch_idx, pred_positions]
         # masked_X = masked_X.reshape((batch_size, num_pred_positions, -1))
-        y = torch.nonzero(pred_positions).to('cuda')
+        y = torch.nonzero(pred_positions).to(device)
+        index = []
+        for idx in y:
+            index.append(idx[0]*self.max_length + idx[1])
+        index = torch.tensor(index)
         x = X.reshape(-1, self.num_inputs)
-        masked_X = [x[idx[0]*self.max_length+idx[1]] for idx in y]
-        masked_X = torch.tensor([item.cpu().detach().numpy() for item in masked_X]).to('cuda')
+        # masked_X = [x[idx[0]*self.max_length+idx[1]] for idx in y]
+        # masked_X = torch.tensor([item.cpu().detach().numpy() for item in masked_X]).to(device)
+        masked_X = x.index_select(0, index)
         mlm_Y_hat = self.mlp(masked_X)
         return mlm_Y_hat
 
