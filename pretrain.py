@@ -38,9 +38,9 @@ if __name__ == '__main__':
                       vocab_size=args.vocab_size)
     mask_model = MaskLM(args.vocab_size, args.dff, num_inputs=args.d_model, max_length=max_length)
 
-    device = torch.device("cuda")
+    device = torch.device("cpu")
     model.to(device)
-    mask_model.to(device)
+    # mask_model.to(device)
 
     train_src = 'data/USPTO-50k_no_rxn/USPTO-50k_no_rxn.vocab.txt'
     train_dataset = SmilesDataset(args, args.train_src)
@@ -74,10 +74,12 @@ if __name__ == '__main__':
     params.extend(params2)
     betas = [args.adam_beta1, args.adam_beta2]
     optimizer = optim.Adam(params, lr=args.lr, betas=betas, eps=1e-9)
-    loss_fn = torch.nn.CrossEntropyLoss(reduction='sum')
+    loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
 
     epochs = args.epochs
     for epoch in range(epochs):
+        model.train()
+        # mask_model.train()
         start_time = time.time
         for step, batch in enumerate(train_dataloader):
             x = batch['x']
@@ -88,17 +90,39 @@ if __name__ == '__main__':
             mask = torch.eq(x, 1).to(torch.float32)
             mask = mask.unsqueeze(1).unsqueeze(2)
             outputs = model(x, None, mask, training=True)
+            # mlm_Y_hat = model(x, None, mask, training=True)
+            mlm_Y_hat = mask_model(outputs, char_weight)
+            # lcoall = torch.nonzero(char_weight).to(device)
+            # print(lcoall)
+
+            weight = torch.nonzero(char_weight)
+            y = y.reshape(-1)
+            y = [y[idx[0]*max_length+idx[1]] for idx in weight]
+            y = torch.tensor(y).to(device)
+            loss = loss_fn(mlm_Y_hat, y)
+            loss.backward()
+            optimizer.step()
+            print(loss)
+            # if step % 20 == 0:
+            #     print(loss)
+    for batch in test_dataloader:
+        with torch.no_grad():
+            model.eval()
+            mask_model.eval()
+            x = batch['x']
+            y = batch['y']
+            char_weight = batch['weight']
+
+            mask = torch.eq(x, 1).to(torch.float32)
+            mask = mask.unsqueeze(1).unsqueeze(2)
+            outputs = model(x, None, mask, training=True)
             mlm_Y_hat = mask_model(outputs, char_weight)
 
             weight = torch.nonzero(char_weight)
             y = y.reshape(-1)
             y = [y[idx[0]*max_length+idx[1]] for idx in weight]
-            y = torch.tensor(y).to('cuda')
+            y = torch.tensor(y).to(device)
             loss = loss_fn(mlm_Y_hat, y)
-            loss.backward()
-            optimizer.step()
-            if step % 100 == 0:
-                print(loss)
     print(loss)
     torch.save(model.state_dict(), 'Bert_smiles.pt')
 
