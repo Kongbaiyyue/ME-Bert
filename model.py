@@ -64,17 +64,17 @@ class MultiHeadAttention(nn.Module):
         # dk = tf.cast(tf.shape(k)[-1], tf.float32)
         scaled_attention_logits = matmul_qk / math.sqrt(k.size()[-1])
 
-        if self.max_relative_positions > 0:
-            key_len = k.size(2)
-            # 1 or key_len x key_len
-            relative_positions_matrix = generate_relative_positions_matrix(
-                key_len, self.max_relative_positions)
-            #  1 or key_len x key_len x dim_per_head
-            relations_keys = self.relative_positions_embeddings(
-                relative_positions_matrix.to(k.device))
-            #  1 or key_len x key_len x dim_per_head
-            relations_values = self.relative_positions_embeddings(
-                relative_positions_matrix.to(k.device))
+        # if self.max_relative_positions > 0:
+        #     key_len = k.size(2)
+        #     # 1 or key_len x key_len
+        #     relative_positions_matrix = generate_relative_positions_matrix(
+        #         key_len, self.max_relative_positions)
+        #     #  1 or key_len x key_len x dim_per_head
+        #     relations_keys = self.relative_positions_embeddings(
+        #         relative_positions_matrix.to(k.device))
+        #     #  1 or key_len x key_len x dim_per_head
+        #     relations_values = self.relative_positions_embeddings(
+        #         relative_positions_matrix.to(k.device))
 
         # add the mask to the scaled tensor.
         if mask is not None:
@@ -82,26 +82,34 @@ class MultiHeadAttention(nn.Module):
         if adjoin_matrix is not None:
             scaled_attention_logits += adjoin_matrix
 
-        if self.max_relative_positions > 0:
-            scores = scaled_attention_logits + relative_matmul(q, relations_keys, True)
-        else:
-            scores = scaled_attention_logits
+        # if self.max_relative_positions > 0:
+        #     scores = scaled_attention_logits + relative_matmul(q, relations_keys, True)
+        # else:
+        #     scores = scaled_attention_logits
 
         # softmax is normalized on the last axis (seq_len_k) so that the scores
         # add up to 1.
-        attn = self.softmax(scores).to(q.dtype)
-        drop_attn = self.dropout(attn)
+        attn = self.softmax(scaled_attention_logits).to(q.dtype)
+        # drop_attn = self.dropout(attn)
 
-        output = torch.matmul(drop_attn, v)
+        # output = torch.matmul(drop_attn, v)
+        output = torch.matmul(attn, v)
 
-        if self.max_relative_positions > 0:
-            output = output + relative_matmul(drop_attn, relations_values, False)
+        # if self.max_relative_positions > 0:
+        #     output = output + relative_matmul(drop_attn, relations_values, False)
 
         # attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., seq_len_q, seq_len_k)
         # output = torch.matmul(attention_weights, v)  # (..., seq_len_q, depth_v)
 
-        return output, drop_attn
+        return output, attn
 
+    def split_heads(self, x, batch_size):
+        """Split the last dimension into (num_heads, depth).
+        Transpose the result such that the shape is (batch_size, num_heads, seq_len, depth)
+        """
+        x = x.view(batch_size, -1, self.num_heads, self.depth)
+        return x.transpose(1, 2).contiguous()
+    
     def forward(self, v, k, q, mask, adjoin_matrix):
         batch_size = q.size(0)
         # print(q.device)
@@ -110,20 +118,20 @@ class MultiHeadAttention(nn.Module):
         k = self.wk(k)  # (batch_size, seq_len, d_model)
         v = self.wv(v)  # (batch_size, seq_len, d_model)
 
-        dim_per_head = self.depth
-        head_count = self.num_heads
+        # dim_per_head = self.depth
+        # head_count = self.num_heads
 
-        def shape(x):
-            """Projection."""
-            return x.view(batch_size, -1, head_count, dim_per_head) \
-                .transpose(1, 2)
+        # def shape(x):
+        #     """Projection."""
+        #     return x.view(batch_size, -1, head_count, dim_per_head) \
+        #         .transpose(1, 2)
 
-        q = shape(q)
-        k = shape(k)
-        v = shape(v)
-        # q = self.split_heads(q, batch_size)  # (batch_size, num_heads, seq_len_q, depth)
-        # k = self.split_heads(k, batch_size)  # (batch_size, num_heads, seq_len_k, depth)
-        # v = self.split_heads(v, batch_size)  # (batch_size, num_heads, seq_len_v, depth)
+        # q = shape(q)
+        # k = shape(k)
+        # v = shape(v)
+        q = self.split_heads(q, batch_size)  # (batch_size, num_heads, seq_len_q, depth)
+        k = self.split_heads(k, batch_size)  # (batch_size, num_heads, seq_len_k, depth)
+        v = self.split_heads(v, batch_size)  # (batch_size, num_heads, seq_len_v, depth)
 
         # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
         # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
@@ -167,10 +175,12 @@ class PositionwiseFeedForward(nn.Module):
         Returns:
             (FloatTensor): Output ``(batch_size, input_len, model_dim)``.
         """
-
-        inter = self.dropout_1(self.relu(self.w_1(self.layer_norm(x))))
-        output = self.dropout_2(self.w_2(inter))
-        return output + x
+        output = self.w_1(x)
+        output = gelu(output)
+        output = self.w_2(output)
+        # inter = self.dropout_1(self.relu(self.w_1(self.layer_norm(x))))
+        # output = self.dropout_2(self.w_2(inter))
+        return output
 
 
 class EncoderLayer(nn.Module):
@@ -193,6 +203,7 @@ class EncoderLayer(nn.Module):
         out1 = x + attn_output
 
         ffn_output = self.ffn(out1)  # (batch_size, input_seq_len, d_model)
+        ffn_output = self.dropout2(ffn_output)
         # ffn_output = self.dropout2(ffn_output, training=training)
         out2 = self.layernorm2(out1 + ffn_output)  # (batch_size, input_seq_len, d_model)
 
@@ -223,7 +234,7 @@ class Encoder(nn.Module):
         # adding embedding and position encoding.
         # print(x.device)
         x = self.embedding(x)   # (batch_size, input_seq_len, d_model)
-        x *= math.sqrt(self.d_model)
+        x *= math.sqrt(torch.tensor(self.d_model, dtype=torch.float32, device=device))
 
         x = self.dropout(x)
 
@@ -239,7 +250,7 @@ class BertModel(nn.Module):
                                num_heads=num_heads, dff=dff, input_vocab_size=vocab_size, maximum_position_encoding=200,
                                dropout=dropout_rate)
         self.fc1 = nn.Linear(d_model, d_model)
-        self.layer_norm = nn.LayerNorm(d_model, eps=1e-6)
+        self.layer_norm = nn.LayerNorm(d_model, eps=0.001)
         self.fc2 = nn.Linear(d_model, vocab_size)
 
     def forward(self, x, adjoin_matrix, mask, training=False):
