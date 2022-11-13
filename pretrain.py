@@ -16,7 +16,7 @@ def train_step(x, y, char_weight):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Get saved data/model path")
-    parser.add_argument('--train_src', '-train_src', type=str, default='data/USPTO-50k_no_rxn/src-train.txt')
+    parser.add_argument('--train_src', '-train_src', type=str, default='data/USPTO-50k_no_rxn/train-bert.txt')
     parser.add_argument('--test_src', '-test_src', type=str, default='data/USPTO-50k_no_rxn/src-test.txt')
     parser.add_argument('--num_layers', '-num_layers', type=int, default=6)
     parser.add_argument('--d_model', '-d_model', type=int, default=256)
@@ -39,7 +39,7 @@ if __name__ == '__main__':
                       vocab_size=args.vocab_size)
     mask_model = MaskLM(args.vocab_size, args.dff, num_inputs=args.d_model, max_length=max_length)
 
-    device = torch.device("cpu")
+    device = torch.device("cuda")
     model.to(device)
     # mask_model.to(device)
 
@@ -107,24 +107,30 @@ if __name__ == '__main__':
             print(loss)
             # if step % 20 == 0:
             #     print(loss)
+    all_test = 0
+    prec = 0
+
+    # 验证模型
     for batch in test_dataloader:
         with torch.no_grad():
             model.eval()
-            mask_model.eval()
+            # mask_model.eval()
             x = batch['x']
             y = batch['y']
             char_weight = batch['weight']
 
+            # optimizer.zero_grad()
             mask = torch.eq(x, 1).to(torch.float32)
             mask = mask.unsqueeze(1).unsqueeze(2)
             outputs = model(x, None, mask, training=True)
-            mlm_Y_hat = mask_model(outputs, char_weight)
+            outputs_label = torch.max(outputs, dim=-1)
+            w = torch.nonzero(char_weight).to(device)
 
-            weight = torch.nonzero(char_weight)
-            y = y.reshape(-1)
-            y = [y[idx[0]*max_length+idx[1]] for idx in weight]
-            y = torch.tensor(y).to(device)
-            loss = loss_fn(mlm_Y_hat, y)
+            for idx in w:
+                all_test += 1
+                if outputs_label[1][idx[0]][idx[1]] == y[idx[0]][idx[1]]:
+                    prec += 1
+    print(prec/float(all_test))
     print(loss)
     torch.save(model.state_dict(), 'Bert_smiles.pt')
 
