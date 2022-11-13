@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 from dataset_SMILES import SmilesDataset, SmilesCollator
 from model import BertModel, MaskLM
+from sample_loss import SampleLoss
 
 
 def train_step(x, y, char_weight):
@@ -74,7 +75,8 @@ if __name__ == '__main__':
     params.extend(params2)
     betas = [args.adam_beta1, args.adam_beta2]
     optimizer = optim.Adam(params, lr=args.lr, betas=betas, eps=1e-9)
-    loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
+    # loss_fn = torch.nn.CrossEntropyLoss(reduction='mean')
+    loss_fn = SampleLoss()
 
     epochs = args.epochs
     for epoch in range(epochs):
@@ -91,15 +93,15 @@ if __name__ == '__main__':
             mask = mask.unsqueeze(1).unsqueeze(2)
             outputs = model(x, None, mask, training=True)
             # mlm_Y_hat = model(x, None, mask, training=True)
-            mlm_Y_hat = mask_model(outputs, char_weight)
+            # mlm_Y_hat = mask_model(outputs, char_weight)
             # lcoall = torch.nonzero(char_weight).to(device)
             # print(lcoall)
 
-            weight = torch.nonzero(char_weight)
-            y = y.reshape(-1)
-            y = [y[idx[0]*max_length+idx[1]] for idx in weight]
-            y = torch.tensor(y).to(device)
-            loss = loss_fn(mlm_Y_hat, y)
+            # weight = torch.nonzero(char_weight)
+            # y = y.reshape(-1)
+            # y = [y[idx[0]*max_length+idx[1]] for idx in weight]
+            # y = torch.tensor(y).to(device)
+            loss = loss_fn(outputs.view(-1, args.vocab_size), y.view(-1))
             loss.backward()
             optimizer.step()
             print(loss)

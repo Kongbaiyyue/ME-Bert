@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm
 
-device = 'cuda:0'
+device = 'cpu'
 
 
 class SmilesDataset(Dataset):

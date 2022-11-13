@@ -246,7 +246,7 @@ class BertModel(nn.Module):
         x = self.encoder(x, training=training, mask=mask, adjoin_matrix=adjoin_matrix)
         x = self.fc1(x)
         x = self.layer_norm(x)
-        # x = self.fc2(x)
+        x = self.fc2(x)
         # y = torch.nonzero(pred_positions)
         return x
 
